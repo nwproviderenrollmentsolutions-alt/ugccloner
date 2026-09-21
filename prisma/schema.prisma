@@ -1,0 +1,351 @@
+// Prisma schema — AI UGC Viral Cloner
+//
+// ENGINEERING DECISION: PostgreSQL, per the architecture doc's recommendation — the
+// schema uses Json columns extensively (structured analysis/blueprint/script payloads),
+// which Prisma's SQLite connector does not support. Local dev connects to a local
+// Postgres (see docker-compose.yml, or a native `postgresql` install) via DATABASE_URL;
+// no other code changes are needed to point this at a managed Postgres in production.
+// Status/type "enums" are plain String columns backed by TS union types in src/types —
+// see src/types/enums.ts (keeps a future multi-connector story simple; Prisma enums are
+// fine on Postgres, but there's no need for them here).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  avatars         Avatar[]
+  projects        Project[]
+  frameworks      ViralFramework[]
+  providerConfigs ProviderConfig[]
+}
+
+model Avatar {
+  id                  String   @id @default(uuid())
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name                String
+  description         String?
+  voiceProvider       String?
+  voiceId             String?
+  defaultWardrobe     String?
+  defaultEnvironment  String?
+  performanceStyle    String?
+  personality         String?
+  cameraPreferences   String?
+  negativeConstraints String? // newline-separated; defaults applied in code if blank
+  status              String   @default("ACTIVE")
+  identityConsistency String   @default("LIMITED") // HIGH | LIMITED | UNKNOWN — provider-reported, never invented
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  references  AvatarReference[]
+  projects    Project[]
+  generations Generation[]
+
+  @@index([userId])
+}
+
+model AvatarReference {
+  id         String   @id @default(uuid())
+  avatarId   String
+  avatar     Avatar   @relation(fields: [avatarId], references: [id], onDelete: Cascade)
+  type       String // FACE_IMAGE | REFERENCE_VIDEO | VOICE_SAMPLE
+  storageKey String
+  url        String?
+  createdAt  DateTime @default(now())
+
+  @@index([avatarId])
+}
+
+model Project {
+  id           String    @id @default(uuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  product      String
+  productUrl   String?
+  platform     String // TIKTOK | REELS | SHORTS
+  duration     Int // target seconds
+  campaignGoal String?
+  avatarId     String?
+  avatar       Avatar?   @relation(fields: [avatarId], references: [id])
+  status       String    @default("CREATED")
+  errorMessage String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  referenceVideos ReferenceVideo[]
+  analyses        VideoAnalysis[]
+  researchJobs    ResearchJob[]
+  viralVideos     ViralVideo[]
+  blueprint       CreativeBlueprint?
+  scripts         Script[]
+  shots           Shot[]
+  generations     Generation[]
+  finalAssets     GeneratedAsset[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model ReferenceVideo {
+  id               String   @id @default(uuid())
+  projectId        String
+  project          Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  storageKey       String
+  url              String?
+  originalFilename String
+  mimeType         String
+  fileSizeBytes    Int
+  durationSeconds  Float?
+  width            Int?
+  height           Int?
+  fps              Float?
+  hasAudio         Boolean?
+  metadataStatus   String   @default("PENDING") // PENDING | EXTRACTED | UNKNOWN
+  status           String   @default("UPLOADED")
+  createdAt        DateTime @default(now())
+
+  analyses VideoAnalysis[]
+
+  @@index([projectId])
+}
+
+model VideoAnalysis {
+  id               String   @id @default(uuid())
+  projectId        String
+  project          Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  referenceVideoId String
+  referenceVideo   ReferenceVideo @relation(fields: [referenceVideoId], references: [id], onDelete: Cascade)
+  hook             Json // hook analysis object
+  timeline         Json // array of segments
+  performance      Json
+  editing          Json
+  cta              Json
+  provider         String
+  isMock           Boolean  @default(false)
+  createdAt        DateTime @default(now())
+
+  @@index([projectId])
+}
+
+model ResearchJob {
+  id          String    @id @default(uuid())
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  query       Json // {product, category, platform, timePeriod, searchQueries}
+  status      String    @default("PENDING")
+  provider    String
+  isMock      Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  viralVideos ViralVideo[]
+
+  @@index([projectId])
+}
+
+model ViralVideo {
+  id                String      @id @default(uuid())
+  projectId         String
+  project           Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  researchJobId     String
+  researchJob       ResearchJob @relation(fields: [researchJobId], references: [id], onDelete: Cascade)
+  externalId        String
+  platform          String
+  title             String
+  channel           String?
+  url               String
+  publishedAt       DateTime?
+  durationSeconds   Float?
+  viewCount         String? // numeric string, or "UNKNOWN" — never fabricated
+  engagementMetrics Json?
+  thumbnailUrl      String?
+  description       String?
+  searchQuery       String
+  retrievedAt       DateTime    @default(now())
+  analysis          Json? // hook/structure/pacing/CTA/editing extraction
+
+  frameworks ViralFramework[]
+
+  @@index([projectId])
+  @@index([researchJobId])
+}
+
+model ViralFramework {
+  id             String   @id @default(uuid())
+  userId         String
+  user           User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceVideoId  String?
+  sourceVideo    ViralVideo? @relation(fields: [sourceVideoId], references: [id])
+  name           String
+  hookType       String
+  structure      Json // ordered array of structure steps
+  pacing         String
+  visualStrategy String
+  platform       String?
+  category       String?
+  durationBucket String?
+  productType    String?
+  notes          String?
+  adaptable      Boolean  @default(true)
+  dateAnalyzed   DateTime @default(now())
+
+  blueprints CreativeBlueprint[]
+
+  @@index([userId])
+}
+
+model CreativeBlueprint {
+  id                  String          @id @default(uuid())
+  projectId           String          @unique
+  project             Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  frameworkId         String?
+  framework           ViralFramework? @relation(fields: [frameworkId], references: [id])
+  campaignObjective   String
+  targetAudience      String
+  hookStrategy        Json
+  storyStructure      Json
+  visualStrategy      Json
+  performanceStrategy Json
+  bRollStrategy       Json
+  editingStrategy     Json
+  ctaStrategy         Json
+  createdAt           DateTime        @default(now())
+
+  scripts Script[]
+}
+
+model Script {
+  id              String             @id @default(uuid())
+  projectId       String
+  project         Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  blueprintId     String?
+  blueprint       CreativeBlueprint? @relation(fields: [blueprintId], references: [id])
+  version         String // "A" | "B" | "C" ...
+  label           String // e.g. "Curiosity hook"
+  hookType        String
+  durationSeconds Int
+  content         Json // structured script lines
+  status          String             @default("DRAFT") // DRAFT | APPROVED
+  createdAt       DateTime           @default(now())
+
+  shots Shot[]
+
+  @@index([projectId])
+}
+
+model Shot {
+  id               String   @id @default(uuid())
+  projectId        String
+  project          Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scriptId         String
+  script           Script   @relation(fields: [scriptId], references: [id], onDelete: Cascade)
+  shotNumber       Int
+  durationSeconds  Float
+  dialogue         String?
+  visual           String
+  camera           String
+  framing          String
+  avatarAction     String
+  facialExpression String
+  gesture          String?
+  background       String
+  bRoll            String?
+  onScreenText     String?
+  caption          String?
+  transition       String?
+  sound            String?
+  generationPrompt String
+  status           String   @default("PENDING") // PENDING | GENERATING | GENERATED | APPROVED | REJECTED | FAILED
+  createdAt        DateTime @default(now())
+
+  generations Generation[]
+
+  @@index([projectId])
+  @@index([scriptId])
+}
+
+model Generation {
+  id             String    @id @default(uuid())
+  projectId      String
+  project        Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  shotId         String
+  shot           Shot      @relation(fields: [shotId], references: [id], onDelete: Cascade)
+  avatarId       String?
+  avatar         Avatar?   @relation(fields: [avatarId], references: [id])
+  provider       String
+  externalJobId  String?
+  status         String    @default("QUEUED") // QUEUED | PROCESSING | COMPLETED | FAILED
+  isMock         Boolean   @default(false)
+  errorMessage   String?
+  requestPayload Json?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  assets            GeneratedAsset[]
+  consistencyChecks AvatarConsistencyCheck[]
+
+  @@index([projectId])
+  @@index([shotId])
+  @@index([status])
+}
+
+model GeneratedAsset {
+  id              String      @id @default(uuid())
+  projectId       String
+  project         Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  generationId    String?
+  generation      Generation? @relation(fields: [generationId], references: [id], onDelete: Cascade)
+  type            String // SHOT | FINAL_VIDEO
+  storageKey      String
+  url             String
+  durationSeconds Float?
+  width           Int?
+  height          Int?
+  aspectRatio     String?
+  createdAt       DateTime    @default(now())
+
+  @@index([projectId])
+}
+
+model AvatarConsistencyCheck {
+  id                 String     @id @default(uuid())
+  generationId       String
+  generation         Generation @relation(fields: [generationId], references: [id], onDelete: Cascade)
+  identityConsistent Boolean?
+  confidence         Float?
+  issues             Json?
+  recommendation     String // APPROVE | REVIEW | REJECT | UNKNOWN
+  method             String // capability that produced this result, or "UNSUPPORTED"
+  createdAt          DateTime   @default(now())
+
+  @@index([generationId])
+}
+
+model ProviderConfig {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  providerType String // AI | VIDEO_GENERATION | AVATAR | SEARCH | STORAGE
+  providerName String
+  config       Json?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId])
+}

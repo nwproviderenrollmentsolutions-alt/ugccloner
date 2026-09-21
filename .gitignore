@@ -1,0 +1,22 @@
+node_modules/
+.next/
+out/
+build/
+dist/
+*.log
+npm-debug.log*
+
+.env
+.env.local
+.env*.local
+
+prisma/dev.db
+prisma/dev.db-journal
+
+# Local dev upload storage (root-anchored — do NOT match src/**/storage/)
+/storage/*
+!/storage/.gitkeep
+
+.DS_Store
+*.tsbuildinfo
+coverage/
